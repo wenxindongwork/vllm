@@ -906,7 +906,8 @@ class TPUModelRunner:
         self.model = model
         self.sampler = TPUSampler()
 
-        if envs.VLLM_TORCHAX_ENABLED:
+        if envs.VLLM_TORCHAX_ENABLED:            
+            self.model = torchax.interop.JittableModule(self.model, side_effect = self)
             self.sampler = torchax.interop.JittableModule(self.sampler)
 
     @torch.no_grad()

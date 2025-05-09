@@ -204,7 +204,8 @@ class TPUWorker:
             total_memory_size = m["bytes_limit"]
             current_mem = m["bytes_in_use"]
             # TODO: Torchax OOMs if we use the same heuristic as torchxla.
-            profiled = m["peak_bytes_in_use"]
+            # TODO: compiled mode OOM more easily for some reason.
+            profiled = m["peak_bytes_in_use"] * 5
 
         # Calculate the TPU KV cache size based on profiling.
         usable_memory_size = int(total_memory_size *
