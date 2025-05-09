@@ -4,7 +4,9 @@ from dataclasses import dataclass
 from typing import NamedTuple, Optional
 
 import torch
-
+import vllm.envs as envs
+if envs.VLLM_TORCHAX_ENABLED:
+    from jax.tree_util import register_pytree_node
 
 class LogprobsLists(NamedTuple):
 
@@ -58,6 +60,21 @@ class LogprobsTensors(NamedTuple):
             selected_token_ranks=selected_token_ranks,
         )
 
+if envs.VLLM_TORCHAX_ENABLED:
+    def logprobs_tensors_flatten(logprobs: LogprobsTensors):
+        children = (logprobs.logprob_token_ids, logprobs.logprobs, logprobs.selected_token_ranks)
+        aux_data = None
+        return children, aux_data
+
+    def logprobs_tensors_unflatten(aux_data, children):
+        return LogprobsTensors(*children)
+
+    register_pytree_node(
+        LogprobsTensors,
+        logprobs_tensors_flatten,
+        logprobs_tensors_unflatten
+    )
+
 
 @dataclass
 class SamplerOutput:
@@ -68,6 +85,23 @@ class SamplerOutput:
     # PLACEHOLDER_TOKEN_ID (-1 by default) is used for padding.
     sampled_token_ids: torch.Tensor
     logprobs_tensors: Optional[LogprobsTensors]
+
+
+if envs.VLLM_TORCHAX_ENABLED:
+    def sampler_output_flatten(output: SamplerOutput):
+        children = (output.sampled_token_ids, output.logprobs_tensors)
+        aux_data = None
+        return children, aux_data
+
+    def sampler_output_unflatten(aux_data, children):
+        return SamplerOutput(*children)
+
+    register_pytree_node(
+        SamplerOutput,
+        sampler_output_flatten,
+        sampler_output_unflatten
+    )
+
 
 
 # ModelRunnerOutput is serialized and sent to the scheduler process.

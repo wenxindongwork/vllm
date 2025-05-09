@@ -15,6 +15,8 @@ if envs.VLLM_TORCHAX_ENABLED:
     import torchax
     torchax.enable_globally()
     import jax 
+    from functools import partial
+    from torchax.interop import jax_jit
 
 import torch_xla.core.xla_model as xm
 import torch_xla.runtime as xr
@@ -904,6 +906,9 @@ class TPUModelRunner:
         self.model = model
         self.sampler = TPUSampler()
 
+        if envs.VLLM_TORCHAX_ENABLED:
+            self.sampler = torchax.interop.JittableModule(self.sampler)
+
     @torch.no_grad()
     def _dummy_run(self, num_tokens: int) -> None:
         if self.is_multimodal_model:
@@ -1248,9 +1253,12 @@ class TPUModelRunner:
                 compiled_model.original_code_object)
             compiled_model.compiled_codes.clear()
 
-    @torch.compile(backend="openxla", fullgraph=True, dynamic=False)
     def select_hidden_states(self, hidden_states, indices_do_sample):
-        return hidden_states[indices_do_sample]
+        @jax_jit
+        @torch.compile(backend="openxla", fullgraph=True, dynamic=False)
+        def select_hidden_states_impl(hidden_states, indices_do_sample):
+            return hidden_states[indices_do_sample]
+        return select_hidden_states_impl(hidden_states, indices_do_sample)
 
     @torch.compile(backend="openxla", fullgraph=True, dynamic=False)
     def compute_logits(self,
@@ -1261,22 +1269,32 @@ class TPUModelRunner:
     def sample_from_logits(
             self, logits: torch.Tensor,
             sampling_metadata: TPUSupportedSamplingMetadata) -> torch.Tensor:
-        if sampling_metadata.all_greedy:
-            out_tokens = torch.argmax(logits, dim=-1, keepdim=True)
-        else:
-            out_tokens = self.sampler(logits,
-                                      sampling_metadata).sampled_token_ids
-        return out_tokens
+        
+        @jax_jit
+        @torch.compile(backend="openxla", fullgraph=True, dynamic=False)
+        def sample_from_logits_impl(logits, sampling_metadata):
+            if sampling_metadata.all_greedy:
+                out_tokens = torch.argmax(logits, dim=-1, keepdim=True)
+            else:
+                out_tokens = self.sampler(logits,
+                                        sampling_metadata).sampled_token_ids
+            return out_tokens
+        return sample_from_logits_impl(logits, sampling_metadata)
 
-    @torch.compile(backend="openxla", fullgraph=True, dynamic=False)
     def structured_decode(self, require_struct_decoding: torch.Tensor,
                           grammar_bitmask: torch.Tensor, logits: torch.Tensor,
                           arange: torch.Tensor) -> torch.Tensor:
-        return torch.where(
-            require_struct_decoding,
-            self.apply_grammar_bitmask(logits, grammar_bitmask, arange),
-            logits)
+        @jax_jit
+        @torch.compile(backend="openxla", fullgraph=True, dynamic=False)
+        def structured_decode_impl(require_struct_decoding,
+                                    grammar_bitmask, logits, arange):
+            return torch.where(
+                require_struct_decoding,
+                self.apply_grammar_bitmask(logits, grammar_bitmask, arange),
+                logits)
 
+        return structured_decode_impl(require_struct_decoding,
+                                          grammar_bitmask, logits, arange)
     def apply_grammar_bitmask(self, logits: torch.Tensor,
                               grammar_bitmask: torch.Tensor,
                               arange: torch.Tensor):

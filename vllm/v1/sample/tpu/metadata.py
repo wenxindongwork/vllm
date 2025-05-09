@@ -5,7 +5,7 @@ from typing import Optional
 import torch
 
 from vllm.v1.worker.gpu_input_batch import InputBatch
-
+import vllm.envs as envs
 DEFAULT_SAMPLING_PARAMS = dict(
     temperature=-1.0,
     min_p=0.0,
@@ -16,6 +16,8 @@ DEFAULT_SAMPLING_PARAMS = dict(
     # presence_penalties=0.0,
     # repetition_penalties=0.0,
 )
+if envs.VLLM_TORCHAX_ENABLED:
+    from jax.tree_util import register_pytree_node
 
 
 @dataclass
@@ -116,3 +118,49 @@ class TPUSupportedSamplingMetadata:
                 xla_device),
             min_p=input_batch.min_p_cpu_tensor[:padded_num_reqs].to(
                 xla_device))
+
+if envs.VLLM_TORCHAX_ENABLED:
+    def flatten_tpu_metadata(metadata):
+        children = (
+            metadata.temperature,
+            metadata.min_p,
+            metadata.top_k,
+            metadata.top_p,
+            metadata.output_token_ids,
+            metadata.logit_bias,
+            )
+        aux_data = {
+            "all_greedy": metadata.all_greedy,
+            "no_penalties": metadata.no_penalties,
+            "prompt_token_ids": metadata.prompt_token_ids,
+            "frequency_penalties": metadata.frequency_penalties,
+            "presence_penalties": metadata.presence_penalties,
+            "repetition_penalties": metadata.repetition_penalties,
+            "min_tokens": metadata.min_tokens,
+            "allowed_token_ids_mask": metadata.allowed_token_ids_mask,
+            "bad_words_token_ids": metadata.bad_words_token_ids,
+            "_generators": metadata._generators,
+        }
+        
+        return children, aux_data
+
+    def unflatten_tpu_metadata(aux_data, children):
+        temperature, min_p, top_k, top_p, output_token_ids, logit_bias = children
+        
+        return TPUSupportedSamplingMetadata(
+            temperature=temperature,
+            min_p=min_p,
+            top_k=top_k,
+            top_p=top_p,
+            all_greedy=aux_data["all_greedy"],
+            no_penalties=aux_data["no_penalties"],
+            output_token_ids=output_token_ids,
+            logit_bias=logit_bias,
+            _generators=aux_data["_generators"],
+        )
+
+    register_pytree_node(
+        TPUSupportedSamplingMetadata,
+        flatten_tpu_metadata,
+        unflatten_tpu_metadata
+    )
