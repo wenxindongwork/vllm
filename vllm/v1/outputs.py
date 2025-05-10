@@ -103,7 +103,6 @@ if envs.VLLM_TORCHAX_ENABLED:
     )
 
 
-
 # ModelRunnerOutput is serialized and sent to the scheduler process.
 # This is expensive for torch.Tensor so prefer to use list instead.
 @dataclass

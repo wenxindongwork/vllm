@@ -143,6 +143,7 @@ class TPUModelRunner:
             min_token_size=16,
             max_token_size=scheduler_config.max_num_batched_tokens,
             padding_gap=envs.VLLM_TPU_BUCKET_PADDING_GAP)
+        self.num_tokens_paddings = [32]
         # In case `max_num_tokens < max(num_tokens_paddings)` use the actual
         # padded max value to pre-allocate data structures and pre-compile.
         self.max_num_tokens = self.num_tokens_paddings[-1]
@@ -1264,6 +1265,7 @@ class TPUModelRunner:
     @torch.compile(backend="openxla", fullgraph=True, dynamic=False)
     def compute_logits(self,
                        sample_hidden_states: torch.Tensor) -> torch.Tensor:
+        self.model.make_jitted("compute_logits")
         return self.model.compute_logits(sample_hidden_states, None)
 
     @torch.compile(backend="openxla", fullgraph=True, dynamic=False)
