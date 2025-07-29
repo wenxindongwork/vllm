@@ -75,6 +75,8 @@ class KVCacheManager:
         use_eagle: bool = False,
         log_stats: bool = False,
         enable_kv_cache_events: bool = False,
+        dp_size: int = 1,
+        allocation_strategy: str = "local_first",
     ) -> None:
         self.max_model_len = max_model_len
 
@@ -119,6 +121,10 @@ class KVCacheManager:
         # `get_computed_blocks` or `allocate_slots`.
         self.req_to_block_hashes: defaultdict[
             str, list[BlockHash]] = defaultdict(list)
+        
+        # DP-related attributes
+        self.dp_size = dp_size
+        self.allocation_strategy = allocation_strategy
 
     @property
     def usage(self) -> float:
@@ -197,6 +203,7 @@ class KVCacheManager:
         new_computed_blocks: Optional[KVCacheBlocks] = None,
         num_lookahead_tokens: int = 0,
         delay_cache_blocks: bool = False,
+        preferred_device: Optional[int] = None,
     ) -> Optional[KVCacheBlocks]:
         """Add slots for a request with new tokens to append.
 
@@ -265,7 +272,7 @@ class KVCacheManager:
             new_computed_blocks=new_computed_block_list,
         )
 
-        if num_blocks_to_allocate > self.block_pool.get_num_free_blocks():
+        if num_blocks_to_allocate > self.block_pool.get_num_free_blocks(preferred_device):
             # Cannot allocate new blocks
             return None
 
@@ -283,7 +290,7 @@ class KVCacheManager:
                                                   new_computed_block_list)
 
         new_blocks = self.coordinator.allocate_new_blocks(
-            request.request_id, num_tokens_need_slot)
+            request.request_id, num_tokens_need_slot, preferred_device)
 
         # P/D: delay caching blocks if we have to recv from
         # remote. Update state for locally cached blocks.
@@ -405,3 +412,16 @@ class KVCacheManager:
         """Creates a new KVCacheBlocks instance with no blocks."""
         return KVCacheBlocks(tuple([]
                                    for _ in range(self.num_kv_cache_groups)))
+
+    # TODO(wenxin): Are these two functions needed?
+    def get_dp_allocation_stats(self) -> list[int]:
+        """Get allocation statistics for all DP ranks."""
+        if hasattr(self.coordinator, 'get_dp_allocation_stats'):
+            return self.coordinator.get_dp_allocation_stats()
+        return [0] * self.dp_size
+
+    def get_local_allocation_count(self) -> int:
+        """Get allocation count for local rank."""
+        if hasattr(self.coordinator, 'get_local_allocation_count'):
+            return self.coordinator.get_local_allocation_count()
+        return 0
