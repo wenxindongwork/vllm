@@ -38,18 +38,29 @@ class BlockPool:
         num_gpu_blocks: int,
         enable_caching: bool,
         enable_kv_cache_events: bool = False,
+        dp_size: int = 2, # DO NOT SUBMIT
     ):
         assert isinstance(num_gpu_blocks, int) and num_gpu_blocks > 0
         self.num_gpu_blocks = num_gpu_blocks
         self.enable_caching = enable_caching
+        self.dp_size = dp_size 
+        
+        # Calculate blocks per device for DP-aware allocation
+        self.blocks_per_device = num_gpu_blocks // self.dp_size
+        print("BlockPool blocks_per_device", self.blocks_per_device)
+        self.remainder_blocks = num_gpu_blocks % self.dp_size
+        print("BlockPool remainder_blocks", self.remainder_blocks)
+
         # All kv-cache blocks.
-        self.blocks: list[KVCacheBlock] = [
-            KVCacheBlock(idx) for idx in range(num_gpu_blocks)
-        ]
+        self.blocks: list[KVCacheBlock] = [[
+            KVCacheBlock(idx+i*self.blocks_per_device) for idx in range(self.blocks_per_device)
+        ] for i in range(self.dp_size)]
+        
+        
         # Free block queue that constructs and manipulates a doubly linked
         # list of free blocks (including eviction candidates when caching is
         # enabled).
-        self.free_block_queue = FreeKVCacheBlockQueue(self.blocks)
+        self.free_block_queue = [FreeKVCacheBlockQueue(self.blocks[i] ) for i in range(self.dp_size)]
 
         # {block_hash: {block ID: block}}. A cached block is
         # a full block with a block hash that can be used for prefix caching.
@@ -66,7 +77,7 @@ class BlockPool:
         # To represent a placeholder block with block_id=0.
         # The ref_cnt of null_block is not maintained, needs special care to
         # avoid freeing it.
-        self.null_block = self.free_block_queue.popleft()
+        self.null_block = self.free_block_queue[0].popleft()
         self.null_block.is_null = True
 
         self.enable_kv_cache_events = enable_kv_cache_events
@@ -167,22 +178,29 @@ class BlockPool:
                     medium=MEDIUM_GPU,
                 ))
 
-    def get_new_blocks(self, num_blocks: int) -> list[KVCacheBlock]:
-        """Get new blocks from the free block pool.
+    def get_new_blocks(self, num_blocks: int, preferred_device: Optional[int] = None) -> list[KVCacheBlock]:
+        """Get new blocks from the free block pool with DP-aware allocation.
 
         Note that we do not check block cache in this function.
 
         Args:
             num_blocks: The number of blocks to allocate.
+            preferred_device: Preferred device to allocate from (0-based).
 
         Returns:
             A list of new block.
         """
-        if num_blocks > self.get_num_free_blocks():
+        if num_blocks > self.get_num_free_blocks(preferred_device):
             raise ValueError(
                 f"Cannot get {num_blocks} free blocks from the pool")
 
-        ret: list[KVCacheBlock] = self.free_block_queue.popleft_n(num_blocks)
+        # If preferred device is specified and DP is enabled, try to allocate from that device first
+        # DO NOT SUBMIT what if there are not enought blocks?
+        if preferred_device is None:raise ValueError("Preferred device is not specified")
+        # Regular allocation for remaining blocks
+
+
+        ret: list[KVCacheBlock] = self.free_block_queue[preferred_device].popleft_n(num_blocks)
 
         # In order to only iterate the list once, we duplicated code a bit
         if self.enable_caching:
@@ -246,7 +264,7 @@ class BlockPool:
                 # ref_cnt=0 means this block is in the free list (i.e. eviction
                 # candidate), so remove it.
                 if block.ref_cnt == 0 and not block.is_null:
-                    self.free_block_queue.remove(block)
+                    self.free_block_queue[block.block_id//self.blocks_per_device].remove(block)
                 block.ref_cnt += 1
 
     def free_blocks(self, ordered_blocks: Iterable[KVCacheBlock]) -> None:
@@ -261,7 +279,7 @@ class BlockPool:
         blocks_list = list(ordered_blocks)
         for block in blocks_list:
             block.ref_cnt -= 1
-        self.free_block_queue.append_n([
+        self.free_block_queue[block.block_id//self.blocks_per_device].append_n([
             block for block in blocks_list
             if block.ref_cnt == 0 and not block.is_null
         ])
@@ -295,27 +313,27 @@ class BlockPool:
             self.kv_event_queue.append(AllBlocksCleared())
 
         return True
-
-    def get_num_free_blocks(self) -> int:
+    # TODO(wenxin): need to check if the desired value is the total, or dp rank specific. 
+    def get_num_free_blocks(self, preferred_device: int) -> int:
         """Get the number of free blocks in the pool.
 
         Returns:
             The number of free blocks.
         """
-        return self.free_block_queue.num_free_blocks
-
-    def get_usage(self) -> float:
+        return self.free_block_queue[preferred_device].num_free_blocks
+    # TODO(wenxin): need to check if the desired value is the total, or dp rank specific. 
+    def get_usage(self, preferred_device: Optional[int] = None) -> float:
         """Get the KV cache usage.
 
         Returns:
             The KV cache usage (between 0.0 and 1.0).
         """
-
-        # Subtract 1 to account for null block.
+        
         total_gpu_blocks = self.num_gpu_blocks - 1
-        if not total_gpu_blocks:
-            return 0
-        return 1.0 - (self.get_num_free_blocks() / total_gpu_blocks)
+        if preferred_device is None:
+            # return the total number of free blocks
+            return 1.0  - sum(self.get_num_free_blocks(i) for i in range(self.dp_size))/total_gpu_blocks
+        return 1.0 - (self.get_num_free_blocks(preferred_device) / total_gpu_blocks)
 
     def take_events(self) -> list[KVCacheEvent]:
         """Atomically takes all events and clears the queue.

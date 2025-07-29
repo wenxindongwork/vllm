@@ -60,6 +60,7 @@ class Scheduler(SchedulerInterface):
         self.parallel_config = vllm_config.parallel_config
         self.log_stats = log_stats
         self.structured_output_manager = structured_output_manager
+        self.request_to_dp_rank: dict[str, int] = {}
         self.is_encoder_decoder = vllm_config.model_config.is_encoder_decoder
 
         # include_finished_set controls whether a separate set of finished
@@ -164,7 +165,7 @@ class Scheduler(SchedulerInterface):
                 self.use_eagle = True
                 self.num_lookahead_tokens = self.num_spec_tokens
 
-        # Create the KV cache manager.
+        # Create the KV cache manager with DP awareness.
         self.kv_cache_manager = KVCacheManager(
             kv_cache_config=kv_cache_config,
             max_model_len=self.max_model_len,
@@ -172,10 +173,40 @@ class Scheduler(SchedulerInterface):
             use_eagle=self.use_eagle,
             log_stats=self.log_stats,
             enable_kv_cache_events=self.enable_kv_cache_events,
+            dp_size= 2, # self.parallel_config.data_parallel_size,
+            allocation_strategy="local_first",
             dcp_world_size=self.dcp_world_size,
         )
         self.use_pp = self.parallel_config.pipeline_parallel_size > 1
+        
+        # Track request to DP rank mapping for DP-aware allocation
+        self.request_to_dp_rank: dict[str, int] = {}
 
+        self.round_robin_counter = itertools.cycle(range(2))
+
+    def _get_preferred_device(self, request: Request, strategy: str = "round_robin") -> Optional[int]:
+        """Determine the preferred device for a request.
+        
+        Args:
+            request: The request to get preferred device for.
+            
+        Returns:
+            Preferred device, or None if no preference.
+        """
+        if request.request_id in self.request_to_dp_rank:
+            return self.request_to_dp_rank[request.request_id]
+        
+        # Strategy 1: Hash-based assignment for load balancing
+        if strategy == "hash":
+            x = hash(request.request_id) % self.parallel_config.data_parallel_size
+        elif strategy == "round_robin":
+            x =  next(self.round_robin_counter) 
+        else:
+            raise ValueError(f"Invalid strategy: {strategy}")
+        print("_get_preferred_device", x)
+        self.request_to_dp_rank[request.request_id] = x
+        return x
+    
     def schedule(self) -> SchedulerOutput:
         # NOTE(woosuk) on the scheduling algorithm:
         # There's no "decoding phase" nor "prefill phase" in the scheduler.
@@ -195,6 +226,7 @@ class Scheduler(SchedulerInterface):
 
         req_to_new_blocks: dict[str, KVCacheBlocks] = {}
         num_scheduled_tokens: dict[str, int] = {}
+        preferred_device: dict[str, int] = {}
         token_budget = self.max_num_scheduled_tokens
         # Encoder-related.
         scheduled_encoder_inputs: dict[str, list[int]] = {}
@@ -208,8 +240,8 @@ class Scheduler(SchedulerInterface):
         # First, schedule the RUNNING requests.
         req_index = 0
         while req_index < len(self.running) and token_budget > 0:
+            # running request already have a preferred device
             request = self.running[req_index]
-
             num_new_tokens = (request.num_tokens_with_spec +
                               request.num_output_placeholders -
                               request.num_computed_tokens)
@@ -252,10 +284,12 @@ class Scheduler(SchedulerInterface):
                 continue
 
             while True:
+                
                 new_blocks = self.kv_cache_manager.allocate_slots(
                     request,
                     num_new_tokens,
-                    num_lookahead_tokens=self.num_lookahead_tokens)
+                    num_lookahead_tokens=self.num_lookahead_tokens,
+                    preferred_device=self.request_to_dp_rank[request.request_id])
                 if new_blocks is None:
                     # The request cannot be scheduled.
                     # Preempt the lowest-priority request.
@@ -296,6 +330,8 @@ class Scheduler(SchedulerInterface):
             scheduled_running_reqs.append(request)
             req_to_new_blocks[request.request_id] = new_blocks
             num_scheduled_tokens[request.request_id] = num_new_tokens
+            # wenxin: this is a running request
+            preferred_device[request.request_id] = self.request_to_dp_rank[request.request_id]
             token_budget -= num_new_tokens
             req_index += 1
 
@@ -338,6 +374,7 @@ class Scheduler(SchedulerInterface):
                     break
 
                 request = self.waiting.peek_request()
+                dp_rank = self.request_to_dp_rank[request.request_id] if request.request_id in self.request_to_dp_rank else None
 
                 # KVTransfer: skip request if still waiting for remote kvs.
                 if request.status == RequestStatus.WAITING_FOR_REMOTE_KVS:
@@ -379,9 +416,14 @@ class Scheduler(SchedulerInterface):
                 # Get already-cached tokens.
                 if request.num_computed_tokens == 0:
                     # Get locally-cached tokens.
+                    # wenxin: this is where prefill cache hit happens
                     new_computed_blocks, num_new_local_computed_tokens = \
                         self.kv_cache_manager.get_computed_blocks(
                             request)
+                    if dp_rank is None and len(new_computed_blocks.blocks[0]) > 0:
+                        print("wenxin: new_computed_blocks", new_computed_blocks.blocks, len(new_computed_blocks.blocks))
+                        dp_rank = new_computed_blocks.blocks[0][0].block_id // 2 # hard code for now
+                        self.request_to_dp_rank[request.request_id] = dp_rank
 
                     # Get externally-cached tokens if using a KVConnector.
                     if self.connector is not None:
@@ -447,6 +489,8 @@ class Scheduler(SchedulerInterface):
                         if num_new_tokens == 0:
                             # The request cannot be scheduled.
                             break
+                if dp_rank is None:
+                    dp_rank = self._get_preferred_device(request)
 
                 # Handles an edge case when P/D Disaggregation
                 # is used with Spec Decoding where an
@@ -475,6 +519,7 @@ class Scheduler(SchedulerInterface):
                     new_computed_blocks,
                     num_lookahead_tokens=effective_lookahead_tokens,
                     delay_cache_blocks=load_kv_async,
+                    preferred_device=dp_rank,
                     num_encoder_tokens=num_encoder_tokens,
                 )
 
@@ -521,6 +566,8 @@ class Scheduler(SchedulerInterface):
                 req_to_new_blocks[request.request_id] = (
                     self.kv_cache_manager.get_blocks(request.request_id))
                 num_scheduled_tokens[request.request_id] = num_new_tokens
+                # wenxin: this is a fresh new request
+                preferred_device[request.request_id] = self.request_to_dp_rank[request.request_id]
                 token_budget -= num_new_tokens
                 request.status = RequestStatus.RUNNING
                 request.num_computed_tokens = num_computed_tokens
@@ -596,6 +643,7 @@ class Scheduler(SchedulerInterface):
             get_freed_mm_hashes(),
             structured_output_request_ids=structured_output_request_ids,
             grammar_bitmask=grammar_bitmask,
+            preferred_device=preferred_device,
         )
 
         # NOTE(Kuntai): this function is designed for multiple purposes:

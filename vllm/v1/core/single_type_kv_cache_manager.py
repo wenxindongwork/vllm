@@ -3,6 +3,7 @@
 import itertools
 from abc import ABC, abstractmethod
 from collections import defaultdict
+from typing import Callable, Optional
 
 from vllm.utils import cdiv
 from vllm.v1.core.block_pool import BlockPool
@@ -107,7 +108,7 @@ class SingleTypeKVCacheManager(ABC):
             assert len(new_computed_blocks) == 0
 
     def allocate_new_blocks(self, request_id: str,
-                            num_tokens: int) -> list[KVCacheBlock]:
+                            num_tokens: int, preferred_device: Optional[int] = None) -> list[KVCacheBlock]:
         """
         Allocate new blocks for the request to give it at least `num_tokens` 
         token slots.
@@ -126,7 +127,7 @@ class SingleTypeKVCacheManager(ABC):
         if num_new_blocks <= 0:
             return []
         else:
-            new_blocks = self.block_pool.get_new_blocks(num_new_blocks)
+            new_blocks = self.block_pool.get_new_blocks(num_new_blocks, preferred_device)
             req_blocks.extend(new_blocks)
             return new_blocks
 

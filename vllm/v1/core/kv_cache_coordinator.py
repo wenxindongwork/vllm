@@ -30,8 +30,10 @@ class KVCacheCoordinator(ABC):
         self.max_model_len = max_model_len
         self.enable_caching = enable_caching
 
+        # Get DP size from config if available
+        dp_size = getattr(kv_cache_config, 'dp_size', 2)
         self.block_pool = BlockPool(kv_cache_config.num_blocks, enable_caching,
-                                    enable_kv_cache_events)
+                                    enable_kv_cache_events, dp_size)
 
         # Needs special handling for find_longest_cache_hit if eagle is enabled
         self.use_eagle = use_eagle
@@ -90,11 +92,8 @@ class KVCacheCoordinator(ABC):
             manager.save_new_computed_blocks(request_id,
                                              new_computed_blocks[i])
 
-    def allocate_new_blocks(
-            self,
-            request_id: str,
-            num_tokens: int,
-            num_encoder_tokens: int = 0) -> tuple[list[KVCacheBlock], ...]:
+    def allocate_new_blocks(self, request_id: str,
+                            num_tokens: int, num_encoder_tokens: int = 0, preferred_device: Optional[int] = None) -> tuple[list[KVCacheBlock], ...]:
         """
         Allocate new blocks for the request to give it at least `num_tokens` 
         token slots.
@@ -112,7 +111,7 @@ class KVCacheCoordinator(ABC):
         return tuple(
             manager.allocate_new_blocks(
                 request_id, num_encoder_tokens if isinstance(
-                    manager, CrossAttentionManager) else num_tokens)
+                    manager, CrossAttentionManager) else num_tokens, preferred_device)
             for manager in self.single_type_managers)
 
     def cache_blocks(self, request: Request, num_computed_tokens: int) -> None:
