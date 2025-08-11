@@ -171,12 +171,13 @@ class KVCacheBlock:
     """KV-cache block metadata."""
     # Block ID, ranging from 0 to num_gpu_blocks - 1.
     block_id: int
+    dp_rank: int
     # Reference count.
     ref_cnt: int = 0
     # The hash key (block hash + group id) of the block, only available
     # when the block is full and cached.
     _block_hash: Optional[BlockHashWithGroupId] = None
-
+    
     # Used to construct a doubly linked list for free blocks.
     # These two attributes should only be manipulated by FreeKVCacheBlockQueue.
     prev_free_block: Optional["KVCacheBlock"] = None
@@ -235,8 +236,9 @@ class FreeKVCacheBlockQueue:
         blocks: A list of KVCacheBlock objects.
     """
 
-    def __init__(self, blocks: list[KVCacheBlock]) -> None:
+    def __init__(self, blocks: list[KVCacheBlock], dp_rank: int) -> None:
         self.num_free_blocks = len(blocks)
+        self.dp_rank = dp_rank
 
         # Initialize doubly links of consecutive blocks
         for i in range(self.num_free_blocks):
@@ -251,8 +253,8 @@ class FreeKVCacheBlockQueue:
         # The implementation guaranteed that the fake head and tail
         # are NEVER got popped, so we could safely assume each real blocks
         # in the queue has prev and next blocks.
-        self.fake_free_list_head = KVCacheBlock(block_id=-1)
-        self.fake_free_list_tail = KVCacheBlock(block_id=-1)
+        self.fake_free_list_head = KVCacheBlock(block_id=-1, dp_rank=dp_rank)
+        self.fake_free_list_tail = KVCacheBlock(block_id=-1, dp_rank=dp_rank)
         if self.num_free_blocks > 0:
             # Connect fake_head and fake_tail to the first and last block
             # respectively.

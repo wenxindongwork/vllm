@@ -53,14 +53,14 @@ class BlockPool:
 
         # All kv-cache blocks.
         self.blocks: list[KVCacheBlock] = [[
-            KVCacheBlock(idx+i*self.blocks_per_device) for idx in range(self.blocks_per_device)
+            KVCacheBlock(idx, dp_rank=i) for idx in range(self.blocks_per_device)
         ] for i in range(self.dp_size)]
         
         
         # Free block queue that constructs and manipulates a doubly linked
         # list of free blocks (including eviction candidates when caching is
         # enabled).
-        self.free_block_queue = [FreeKVCacheBlockQueue(self.blocks[i] ) for i in range(self.dp_size)]
+        self.free_block_queue = [FreeKVCacheBlockQueue(self.blocks[i], dp_rank=i) for i in range(self.dp_size)]
 
         # {block_hash: {block ID: block}}. A cached block is
         # a full block with a block hash that can be used for prefix caching.
@@ -199,7 +199,6 @@ class BlockPool:
         if preferred_device is None:raise ValueError("Preferred device is not specified")
         # Regular allocation for remaining blocks
 
-
         ret: list[KVCacheBlock] = self.free_block_queue[preferred_device].popleft_n(num_blocks)
 
         # In order to only iterate the list once, we duplicated code a bit
@@ -264,7 +263,7 @@ class BlockPool:
                 # ref_cnt=0 means this block is in the free list (i.e. eviction
                 # candidate), so remove it.
                 if block.ref_cnt == 0 and not block.is_null:
-                    self.free_block_queue[block.block_id//self.blocks_per_device].remove(block)
+                    self.free_block_queue[block.dp_rank].remove(block)
                 block.ref_cnt += 1
 
     def free_blocks(self, ordered_blocks: Iterable[KVCacheBlock]) -> None:
@@ -279,7 +278,7 @@ class BlockPool:
         blocks_list = list(ordered_blocks)
         for block in blocks_list:
             block.ref_cnt -= 1
-        self.free_block_queue[block.block_id//self.blocks_per_device].append_n([
+        self.free_block_queue[block.dp_rank].append_n([
             block for block in blocks_list
             if block.ref_cnt == 0 and not block.is_null
         ])
