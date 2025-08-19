@@ -162,6 +162,8 @@ def set_device_control_env_var(vllm_config: VllmConfig,
     Temporarily set CUDA_VISIBLE_DEVICES or equivalent
     for engine subprocess.
     """
+    # print("current_platform.device_control_env_var", current_platform.device_control_env_var)
+    # return
     world_size = vllm_config.parallel_config.world_size
     evar = current_platform.device_control_env_var
 
@@ -180,10 +182,13 @@ def get_device_indices(device_control_env_var: str, local_dp_rank: int,
     this will select devices 2 and 3 for local_dp_rank=1.
     """
     try:
+        print("local_dp_rank", local_dp_rank)
+        print("current_platform", current_platform)
         value = ",".join(
             str(current_platform.device_id_to_physical_device_id(i))
             for i in range(local_dp_rank * world_size, (local_dp_rank + 1) *
                            world_size))
+        print("value", value)
     except IndexError as e:
         raise Exception(f"Error setting {device_control_env_var}: "
                         f"local range: [{local_dp_rank * world_size}, "
