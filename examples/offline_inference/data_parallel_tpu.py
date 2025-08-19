@@ -136,7 +136,7 @@ def tpu_worker_process(
         "The best programming language is",
         "Climate change is",
         "The universe consists of",
-    ] * 10  # 80 prompts total
+    ] 
 
     # Distribute prompts among DP ranks
     floor = len(prompts) // dp_size
