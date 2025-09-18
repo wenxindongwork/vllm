@@ -15,6 +15,7 @@ from vllm.v1.core.kv_cache_utils import (BlockHash, BlockHashWithGroupId,
                                          make_block_hash_with_group_id,
                                          maybe_convert_block_hash)
 from vllm.v1.request import Request
+import os 
 
 logger = init_logger(__name__)
 
@@ -38,13 +39,13 @@ class BlockPool:
         num_gpu_blocks: int,
         enable_caching: bool,
         enable_kv_cache_events: bool = False,
-        dp_size: int = 2, # DO NOT SUBMIT
+        dp_size: int = None, # DO NOT SUBMIT
     ):
         assert isinstance(num_gpu_blocks, int) and num_gpu_blocks > 0
         self.num_gpu_blocks = num_gpu_blocks
         self.enable_caching = enable_caching
-        self.dp_size = dp_size 
-        
+        self.dp_size = int(os.getenv("DATA_PARALLEL_SIZE", 1))
+
         # Calculate blocks per device for DP-aware allocation
         self.blocks_per_device = num_gpu_blocks // self.dp_size
         print("BlockPool blocks_per_device", self.blocks_per_device)

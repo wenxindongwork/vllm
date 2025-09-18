@@ -11,7 +11,7 @@ from vllm.v1.core.kv_cache_utils import KVCacheBlock
 from vllm.v1.kv_cache_interface import KVCacheConfig
 from vllm.v1.metrics.stats import PrefixCacheStats
 from vllm.v1.request import Request, RequestStatus
-
+from collections import defaultdict
 logger = init_logger(__name__)
 
 
@@ -131,15 +131,10 @@ class KVCacheManager:
         self.num_kv_cache_groups = len(kv_cache_config.kv_cache_groups)
         self.block_pool = self.coordinator.block_pool
         self.kv_cache_config = kv_cache_config
-
-        # Mapping from request ID to kv block hashes.
-        # This is to avoid recomputing the block hashes for each call of
-        # `get_computed_blocks` or `allocate_slots`.
-        self.req_to_block_hashes: defaultdict[
-            str, list[BlockHash]] = defaultdict(list)
         
         # DP-related attributes
         self.dp_size = dp_size
+        assert dp_size>=2
         self.allocation_strategy = allocation_strategy
 
     @property

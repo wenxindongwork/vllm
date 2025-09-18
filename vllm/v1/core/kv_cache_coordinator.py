@@ -11,6 +11,7 @@ from vllm.v1.kv_cache_interface import (FullAttentionSpec, KVCacheConfig,
                                         KVCacheSpec)
 from vllm.v1.request import Request
 
+import os
 
 class KVCacheCoordinator(ABC):
     """
@@ -31,7 +32,7 @@ class KVCacheCoordinator(ABC):
         self.enable_caching = enable_caching
 
         # Get DP size from config if available
-        dp_size = getattr(kv_cache_config, 'dp_size', 2)
+        dp_size = int(os.getenv("DATA_PARALLEL_SIZE", 1))
         self.block_pool = BlockPool(kv_cache_config.num_blocks, enable_caching,
                                     enable_kv_cache_events, dp_size)
 

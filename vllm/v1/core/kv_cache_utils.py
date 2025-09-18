@@ -826,6 +826,8 @@ def get_num_blocks(vllm_config: VllmConfig, num_layers: int,
     num_blocks = int(available_memory // page_size // num_layers)
     num_blocks = max(num_blocks, 0)
     num_blocks = may_override_num_blocks(vllm_config, num_blocks)
+    num_blocks = 128 
+    print("wenxin hardcode num_blocks to 128")
     return num_blocks
 
 

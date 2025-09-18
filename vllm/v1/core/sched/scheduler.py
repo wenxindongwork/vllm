@@ -36,6 +36,7 @@ from vllm.v1.outputs import DraftTokenIds, KVConnectorOutput, ModelRunnerOutput
 from vllm.v1.request import Request, RequestStatus
 from vllm.v1.spec_decode.metrics import SpecDecodingStats
 from vllm.v1.structured_output import StructuredOutputManager
+import os
 
 logger = init_logger(__name__)
 
@@ -166,6 +167,10 @@ class Scheduler(SchedulerInterface):
                 self.num_lookahead_tokens = self.num_spec_tokens
 
         # Create the KV cache manager with DP awareness.
+        # breakpoint()
+        dp_size = int(os.getenv("DATA_PARALLEL_SIZE", 1))
+        assert dp_size >= 2
+
         self.kv_cache_manager = KVCacheManager(
             kv_cache_config=kv_cache_config,
             max_model_len=self.max_model_len,
@@ -173,7 +178,7 @@ class Scheduler(SchedulerInterface):
             use_eagle=self.use_eagle,
             log_stats=self.log_stats,
             enable_kv_cache_events=self.enable_kv_cache_events,
-            dp_size= 2, # self.parallel_config.data_parallel_size,
+            dp_size= dp_size,
             allocation_strategy="local_first",
             dcp_world_size=self.dcp_world_size,
         )
@@ -182,7 +187,7 @@ class Scheduler(SchedulerInterface):
         # Track request to DP rank mapping for DP-aware allocation
         self.request_to_dp_rank: dict[str, int] = {}
 
-        self.round_robin_counter = itertools.cycle(range(2))
+        self.round_robin_counter = itertools.cycle(range(dp_size))
 
     def _get_preferred_device(self, request: Request, strategy: str = "round_robin") -> Optional[int]:
         """Determine the preferred device for a request.
