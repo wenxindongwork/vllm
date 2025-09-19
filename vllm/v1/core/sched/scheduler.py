@@ -169,7 +169,7 @@ class Scheduler(SchedulerInterface):
         # Create the KV cache manager with DP awareness.
         # breakpoint()
         dp_size = int(os.getenv("DATA_PARALLEL_SIZE", 1))
-        assert dp_size >= 2
+        # assert dp_size >= 2
 
         self.kv_cache_manager = KVCacheManager(
             kv_cache_config=kv_cache_config,
