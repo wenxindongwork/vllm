@@ -404,16 +404,3 @@ class KVCacheManager:
         """Creates a new KVCacheBlocks instance with no blocks."""
         return KVCacheBlocks(tuple([]
                                    for _ in range(self.num_kv_cache_groups)))
-
-    # TODO(wenxin): Are these two functions needed?
-    def get_dp_allocation_stats(self) -> list[int]:
-        """Get allocation statistics for all DP ranks."""
-        if hasattr(self.coordinator, 'get_dp_allocation_stats'):
-            return self.coordinator.get_dp_allocation_stats()
-        return [0] * self.dp_size
-
-    def get_local_allocation_count(self) -> int:
-        """Get allocation count for local rank."""
-        if hasattr(self.coordinator, 'get_local_allocation_count'):
-            return self.coordinator.get_local_allocation_count()
-        return 0

@@ -31,7 +31,7 @@ from vllm.v1.engine.output_processor import OutputProcessor
 from vllm.v1.engine.parallel_sampling import ParentRequest
 from vllm.v1.engine.processor import Processor
 from vllm.v1.executor.abstract import Executor
-from vllm.v1.metrics.loggers import (PrometheusStatLogger, StatLoggerBase, LoggingStatLogger,
+from vllm.v1.metrics.loggers import (PrometheusStatLogger, StatLoggerBase,
                                      StatLoggerFactory)
 from vllm.v1.metrics.reader import Metric, get_metrics_snapshot
 from vllm.v1.metrics.stats import IterationStats
@@ -72,10 +72,11 @@ class LLMEngine:
         self.observability_config = vllm_config.observability_config
         self.model_config = vllm_config.model_config
         self.cache_config = vllm_config.cache_config
+
         self.log_stats = log_stats
         self.stat_logger: Optional[StatLoggerBase] = None
         if self.log_stats:
-            self.stat_logger = LoggingStatLogger(vllm_config)
+            self.stat_logger = PrometheusStatLogger(vllm_config)
 
         executor_backend = (
             self.vllm_config.parallel_config.distributed_executor_backend)

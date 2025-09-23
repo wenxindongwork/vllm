@@ -197,7 +197,8 @@ class BlockPool:
 
         # If preferred device is specified and DP is enabled, try to allocate from that device first
         # DO NOT SUBMIT what if there are not enought blocks?
-        if preferred_device is None:raise ValueError("Preferred device is not specified")
+        if preferred_device is None:
+            raise ValueError("Preferred device is not specified")
         # Regular allocation for remaining blocks
 
         ret: list[KVCacheBlock] = self.free_block_queue[preferred_device].popleft_n(num_blocks)
