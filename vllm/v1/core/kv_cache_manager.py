@@ -134,7 +134,6 @@ class KVCacheManager:
         
         # DP-related attributes
         self.dp_size = dp_size
-        # assert dp_size>=2
         self.allocation_strategy = allocation_strategy
 
     @property
